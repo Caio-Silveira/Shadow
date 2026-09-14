@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shadow-desktop-agent"
+version = "0.1.0"
+description = "Portable AI identity and desktop-agent runtime with direct provider APIs and Desktop Commander tools."
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Caio Silveira"}]
+
+[project.scripts]
+shadow-api = "shadow.runtime:main"
+
+[tool.setuptools]
+packages = ["shadow"]

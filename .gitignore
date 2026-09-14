@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+.DS_Store
+# Never commit live identity/memory, API keys, or runtime state
+private/
+runtime/
+memory/
