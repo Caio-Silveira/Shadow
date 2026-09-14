@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="$HOME/.local/share/shadow"
+RUN="$BASE/runtime"
+HEAR="$HOME/.local/bin/shadow-hear"
+VOICE="$HOME/.local/bin/shadow-voice"
+BRIDGE="$HOME/.local/bin/shadow-bridge"
+mkdir -p "$RUN"; chmod 700 "$RUN"
+write_event(){
+  local kind="$1"
+  local text="$2"
+  local file="$RUN/last_${kind}.json"
+  KIND="$kind" TEXT="$text" OUT="$file" python3 - <<'PY'
+import json,os,time,tempfile
+p=os.environ['OUT']; d={'ts':time.time(),'kind':os.environ['KIND'],'text':os.environ['TEXT']}
+t=p+'.tmp'; open(t,'w').write(json.dumps(d,ensure_ascii=False,indent=2)+'\n'); os.chmod(t,0o600); os.replace(t,p)
+PY
+}
+hear(){
+  local sec="${1:-8}" text
+  text="$($HEAR listen "$sec" || true)"
+  text="$(printf '%s' "$text" | sed '/^[[:space:]]*$/d')"
+  [[ -n "$text" ]] || return 3
+  write_event input "$text"
+  printf '%s\n' "$text"
+}
+say(){
+  local text="$*"; [[ -n "$text" ]] || return 2
+  write_event output "$text"
+  "$VOICE" speak "$text"
+}
+status(){
+  echo "runtime: ready"
+  echo "bridge: Desktop Commander"
+  "$HEAR" status
+  "$VOICE" status | sed -n '1,4p'
+  [[ -f "$RUN/last_input.json" ]] && echo "last-input: present" || echo "last-input: none"
+}
+last(){
+  local kind="${1:-input}" file="$RUN/last_${kind}.json"
+  [[ -f "$file" ]] || return 1
+  cat "$file"
+}
+case "${1:-status}" in
+  status) status ;;
+  hear) shift; hear "${1:-8}" ;;
+  say) shift; say "$@" ;;
+  last) shift; last "${1:-input}" ;;
+  context) "$BRIDGE" context ;;
+  clean) rm -f "$RUN"/last_input.json "$RUN"/last_output.json ;;
+  *) echo 'usage: shadow-runtime {status|hear [seconds]|say text|last [input|output]|context|clean}' >&2; exit 2 ;;
+esac

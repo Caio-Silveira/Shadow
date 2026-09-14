@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+HEAR="$HOME/.local/bin/shadow-hear"
+API="$HOME/.local/bin/shadow-api"
+RUNTIME="$HOME/.local/bin/shadow-runtime"
+LOCK="/dev/shm/shadow-speaking-$(id -u)"
+CFG="$HOME/.config/shadow/provider.env"
+[[ ! -f "$CFG" ]] || . "$CFG"
+provider="${SHADOW_PROVIDER:-google}"
+say_answer(){
+  local answer="$1"
+  [[ -n "$answer" ]] || return 1
+  echo "shadow: $answer"
+  : > "$LOCK"; chmod 600 "$LOCK"
+  "$RUNTIME" say "$answer"
+  rm -f "$LOCK"
+}
+handle_once(){
+  local secs="${1:-8}" text answer
+  [[ ! -e "$LOCK" ]] || return 0
+  text="$($HEAR listen "$secs" | tail -n 1)"
+  [[ -n "$text" ]] || return 0
+  echo "heard: $text"
+  answer="$($API "$text")"
+  say_answer "$answer"
+}
+case "${1:-status}" in
+  status)
+    "$HEAR" status
+    "$HOME/.local/bin/shadow-key" status "$provider"
+    echo "model-transport: provider API"
+    echo "provider: $provider"
+    case "$provider" in google) echo "model: ${SHADOW_GOOGLE_MODEL:-gemini-3.5-flash-lite}";; openai) echo "model: ${SHADOW_OPENAI_MODEL:-gpt-5.6-luna}";; anthropic) echo "model: ${SHADOW_ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}";; deepseek) echo "model: ${SHADOW_DEEPSEEK_MODEL:-deepseek-flash}";; lmstudio) echo "model: ${SHADOW_LMSTUDIO_MODEL:-not-set}";; esac
+    echo "desktop-tools: Desktop Commander MCP"
+    echo "vision: on-demand screen capture"
+    echo "live-mode: wake word Shadow"
+    ;;
+  once)
+    handle_once "${2:-8}"
+    ;;
+  live)
+    secs="${2:-12}"
+    if [[ ! -S "/dev/shm/shadow-voice-$(id -u)/tts.sock" ]]; then
+      nohup "$HOME/.local/bin/shadow-voice" serve >/dev/shm/shadow-voice-server.log 2>&1 &
+      sleep 1
+    fi
+    active_until=0
+    echo "Shadow live. Diga 'Shadow' para iniciar; depois converse naturalmente. Ctrl+C para sair."
+    trap 'rm -f "$LOCK"; echo; echo "Shadow live stopped."; exit 0' INT TERM EXIT
+    while :; do
+      text="$($HEAR listen "$secs" | tail -n 1)"
+      [[ -n "$text" ]] || continue
+      lower="${text,,}"
+      now=$(date +%s)
+      if [[ "$lower" == *shadow* ]]; then active_until=$((now+45)); fi
+      (( now <= active_until )) || continue
+      active_until=$((now+45))
+      echo "heard: $text"
+      answer="$($API "$text")"
+      say_answer "$answer"
+    done
+    ;;
+  ask)
+    shift
+    "$API" "$*"
+    ;;
+  say)
+    shift
+    say_answer "$*"
+    ;;
+  *)
+    echo 'usage: shadow-loop {status|once [max-seconds]|live [max-utterance-seconds]|ask <text>|say <text>}' >&2
+    exit 2
+    ;;
+esac

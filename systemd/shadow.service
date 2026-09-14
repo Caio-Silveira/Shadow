@@ -1,0 +1,14 @@
+[Unit]
+Description=Shadow desktop companion
+After=graphical-session.target network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.config/shadow/provider.env
+ExecStart=%h/.local/bin/shadow-loop live
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

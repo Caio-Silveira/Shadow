@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+import argparse, json, os, subprocess, sys, socket, threading, re, queue
+from pathlib import Path
+
+BASE = Path.home()/'.local/share/shadow'
+CFG = BASE/'config/voice.json'
+VENV = BASE/'voice/venv'
+MODEL = BASE/'voice/models/kokoro-v1.0.onnx'
+VOICES = BASE/'voice/models/voices-v1.0.bin'
+RAM = Path('/dev/shm')/f'shadow-voice-{os.getuid()}'
+
+if str(VENV/'lib/python3.12/site-packages') not in sys.path:
+    sys.path.insert(0, str(VENV/'lib/python3.12/site-packages'))
+
+from kokoro_onnx import Kokoro
+import soundfile as sf
+
+def load_cfg():
+    return json.loads(CFG.read_text())
+
+def save_cfg(cfg):
+    tmp = CFG.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2)+'\n')
+    os.chmod(tmp, 0o600)
+    tmp.replace(CFG)
+
+def synth(text, voice, speed):
+    RAM.mkdir(mode=0o700, exist_ok=True)
+    out = RAM/'current.wav'
+    k = Kokoro(str(MODEL), str(VOICES))
+    samples, sr = k.create(text, voice, speed=speed, lang='pt-br')
+    sf.write(out, samples, sr)
+    os.chmod(out, 0o600)
+    return out
+
+def play(path):
+    runner = Path.home()/'.local/bin/gui-run'
+    cmd = [str(runner), 'paplay', str(path)] if runner.exists() else ['paplay', str(path)]
+    return subprocess.run(cmd, check=False).returncode
+
+def speak(text, voice=None, speed=None, do_play=True):
+    cfg = load_cfg()
+    voice = voice or cfg['voice']
+    speed = float(speed if speed is not None else cfg.get('speed', 1.0))
+    if voice not in cfg['available_voices']:
+        raise SystemExit(f'voice desconhecida: {voice}')
+    out = client_speak(text, voice, speed, do_play)
+    if out is not None:
+        return out
+    out = synth(text, voice, speed)
+    if do_play:
+        rc = play(out)
+        if rc != 0:
+            raise SystemExit(f'falha ao reproduzir áudio (rc={rc})')
+    return out
+
+def cmd_status(_):
+    c = load_cfg()
+    print(f"engine: {c['engine']}")
+    print(f"language: {c['language']}")
+    print(f"voice: {c['voice']} — {c['available_voices'][c['voice']]}")
+    print(f"speed: {c.get('speed',1.0)}")
+    print(f"model: {'ok' if MODEL.exists() else 'missing'}")
+
+def cmd_voices(_):
+    c = load_cfg()
+    for key, label in c['available_voices'].items():
+        mark = '*' if key == c['voice'] else ' '
+        print(f'{mark} {key}: {label}')
+
+def cmd_set(a):
+    c = load_cfg()
+    if a.voice not in c['available_voices']:
+        raise SystemExit('voz inválida; use: shadow-voice voices')
+    c['voice'] = a.voice
+    if a.speed is not None:
+        c['speed'] = a.speed
+    save_cfg(c)
+    print(f"voice: {a.voice} — {c['available_voices'][a.voice]}")
+
+def cmd_speak(a):
+    out = speak(a.text, a.voice, a.speed, not a.no_play)
+    if a.no_play:
+        print(out)
+
+def cmd_preview(a):
+    c = load_cfg()
+    targets = list(c['available_voices']) if a.voice == 'all' else [a.voice]
+    sample = a.text or 'Olá. Eu sou o Shadow. Essa é uma das vozes que você pode escolher para mim.'
+    for v in targets:
+        print(f'preview: {v} — {c["available_voices"].get(v,v)}', flush=True)
+        speak(sample, v, a.speed, True)
+
+def serve():
+    RAM.mkdir(mode=0o700, exist_ok=True)
+    sock_path=RAM/'tts.sock'
+    try: sock_path.unlink()
+    except FileNotFoundError: pass
+    k=Kokoro(str(MODEL), str(VOICES))
+    srv=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(sock_path)); os.chmod(sock_path,0o600); srv.listen(4)
+    print(f'shadow-voice server ready: {sock_path}', flush=True)
+    while True:
+        conn,_=srv.accept()
+        with conn:
+            try:
+                req=json.loads(conn.recv(262144).decode())
+                cfg=load_cfg(); voice=req.get('voice') or cfg['voice']; speed=float(req.get('speed') or cfg.get('speed',1.0))
+                text=req['text'].strip()
+                chunks=[x.strip() for x in re.split(r'(?<=[.!?])\s+',text) if x.strip()]
+                if not chunks: chunks=[text]
+                q=queue.Queue(); rcbox={'rc':0}
+                def player():
+                    while True:
+                        item=q.get()
+                        if item is None: break
+                        if req.get('play',True) and play(item)!=0: rcbox['rc']=1
+                th=threading.Thread(target=player); th.start()
+                out=RAM/'current.wav'
+                for i,chunk in enumerate(chunks):
+                    samples,sr=k.create(chunk,voice,speed=speed,lang='pt-br')
+                    part=RAM/f'part-{i%3}.wav'; sf.write(part,samples,sr); os.chmod(part,0o600)
+                    if i==0: sf.write(out,samples,sr); os.chmod(out,0o600)
+                    q.put(part)
+                q.put(None); th.join()
+                conn.sendall(json.dumps({'ok':rcbox['rc']==0,'path':str(out)}).encode())
+            except Exception as e:
+                conn.sendall(json.dumps({'ok':False,'error':str(e)}).encode())
+
+def client_speak(text, voice=None, speed=None, do_play=True):
+    sock_path=RAM/'tts.sock'
+    if not sock_path.exists(): return None
+    try:
+        c=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); c.settimeout(60); c.connect(str(sock_path))
+        c.sendall(json.dumps({'text':text,'voice':voice,'speed':speed,'play':do_play}).encode()); c.shutdown(socket.SHUT_WR)
+        r=json.loads(c.recv(65536).decode()); c.close()
+        if not r.get('ok'): raise RuntimeError(r.get('error','tts server error'))
+        return Path(r['path'])
+    except Exception:
+        return None
+
+def main():
+    ap = argparse.ArgumentParser(prog='shadow-voice')
+    sp = ap.add_subparsers(dest='cmd', required=True)
+    p = sp.add_parser('status'); p.set_defaults(fn=cmd_status)
+    p = sp.add_parser('serve'); p.set_defaults(fn=lambda _: serve())
+    p = sp.add_parser('voices'); p.set_defaults(fn=cmd_voices)
+    p = sp.add_parser('set'); p.add_argument('voice'); p.add_argument('--speed',type=float); p.set_defaults(fn=cmd_set)
+    p = sp.add_parser('speak')
+    p.add_argument('text')
+    p.add_argument('--voice')
+    p.add_argument('--speed', type=float)
+    p.add_argument('--no-play', action='store_true')
+    p.set_defaults(fn=cmd_speak)
+    p = sp.add_parser('preview')
+    p.add_argument('voice', nargs='?', default='all')
+    p.add_argument('--text')
+    p.add_argument('--speed', type=float)
+    p.set_defaults(fn=cmd_preview)
+    a = ap.parse_args()
+    a.fn(a)
+
+if __name__ == '__main__':
+    main()

@@ -1,68 +1,68 @@
-# Shadow
+<p align="center"><img src="assets/shadow-face.svg" width="150" alt="Shadow"></p>
+<h1 align="center">Shadow</h1>
+<p align="center"><strong>E se sua IA pudesse trocar de cérebro sem esquecer quem ela é?</strong></p>
 
-<p align="center"><img src="assets/shadow-face.svg" alt="Shadow face" width="180"></p>
+Shadow é um experimento open source de **identidade persistente para agentes de desktop**. O modelo pensa; Shadow mantém identidade, memória, contexto, voz, permissões e a relação com quem está usando. O Desktop Commander dá acesso ao computador — com consentimento para ações sensíveis.
 
-Shadow is an experiment in making an AI assistant feel less like a website you visit and more like a persistent presence on your own computer.
+Não queremos construir outro chatbot. A pergunta é mais interessante: **o que acontece quando a personalidade deixa de pertencer ao modelo e passa a pertencer ao usuário?**
 
-The model is still remote. The desktop stays local. Shadow sits between them: it carries an identity, memory, context and permission model, then gives the model a controlled way to work with the machine through Desktop Commander.
+## O que já funciona
 
-The first goal is simple: speak to Shadow and get a spoken answer back without browser macros, fake clicks or typing into a chat box.
-
-## Architecture
+- conversa por voz local com Whisper + Kokoro;
+- visão da tela sob demanda;
+- ações no desktop via Desktop Commander/MCP;
+- memória curta e permissões lembradas;
+- Google Gemini, OpenAI, Claude, DeepSeek e modelos locais pelo LM Studio;
+- serviço de usuário para manter Shadow disponível em segundo plano.
 
 ```text
-voice -> whisper.cpp -> Shadow runtime -> provider API
-                                      <-> Desktop Commander (MCP)
-                                      <-> local memory/context
-                         response -> Kokoro -> speakers
+você → voz → Shadow → modelo escolhido
+                    ↕
+          memória · Observer · contexto
+                    ↕
+          Desktop Commander → computador
+                    ↓
+               voz → você
 ```
 
-The provider layer is intentionally separate from the rest of the runtime. OpenAI and Google Gemini are supported today; Anthropic is planned on the same boundary.
+## Instalação
 
-Desktop Commander is not used as the conversation transport. It is Shadow's desktop tool layer. The model asks for only the state it actually needs, which also helps keep API context and cost down.
-
-## What exists today
-
-This repository contains the provider/API runtime and the Desktop Commander MCP bridge. The development machine already has the wider local stack running with whisper.cpp, Silero VAD, Kokoro ONNX, a small persistent memory layer and Graphify-assisted context selection.
-
-The public repo deliberately does **not** contain personal memory, live prompts, credentials, runtime logs or machine-specific state.
-
-## Quick start
-
-You need Python 3.10+, Desktop Commander MCP and a provider API key. For development, Google Gemini is a convenient option because supported Gemini Developer API models have a free tier.
+Hoje o alvo principal é Linux desktop (PipeWire/PulseAudio + systemd user). Tenha Python 3, Git, CMake, curl e Desktop Commander instalados.
 
 ```bash
 git clone https://github.com/Caio-Silveira/Shadow.git
 cd Shadow
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .
-export SHADOW_PROVIDER=google
-export GEMINI_API_KEY="your-key"
-export SHADOW_GOOGLE_MODEL="gemini-3.6-flash"
-shadow-api "What is running on my machine right now?"
+./install.sh
 ```
 
-Choose the provider with `SHADOW_PROVIDER=google` or `SHADOW_PROVIDER=openai`. Google defaults to `gemini-3.6-flash`; OpenAI defaults to `gpt-5.6-luna`. Provider-specific model variables are shown in `.env.example`.
+O instalador prepara Whisper/Kokoro, cria os comandos locais e registra `shadow.service`. Para instalar apenas o runtime: `./install.sh --no-voice`.
 
-The local Desktop Commander paths can be overridden with `SHADOW_NODE` and `SHADOW_DC_SERVER`. See `.env.example`.
+Escolha o cérebro sem trocar a identidade:
 
-## Why not send the whole desktop to the model?
+```bash
+shadow-provider set google      # ou openai, anthropic, deepseek, lmstudio
+shadow-key set google           # não é necessário para LM Studio sem auth
+systemctl --user restart shadow
+```
 
-Because most turns do not need it. Shadow should ask for the smallest useful piece of state, retrieve it locally, and send only that result back to the model. The same idea applies to project context: local indexing/search can narrow the context before the API sees it.
+Para LM Studio, inicie o servidor local e defina `SHADOW_LMSTUDIO_MODEL` em `~/.config/shadow/provider.env`. Veja [providers](docs/PROVIDERS.md).
 
-## Safety
+## A ideia por trás
 
-Desktop access is powerful. Shadow is designed around explicit permission boundaries. Low-risk reads are automatic. For write/execute/process capabilities, Shadow batches the requested actions into one approval dialog and remembers approved capability scopes locally, so the same class of safe action does not keep asking on every turn.
+Shadow aprende, mas não deve virar um espelho que concorda com tudo. O **Observer** é uma segunda leitura interna: questiona certezas, procura pontos cegos e impede que preferências antigas virem regras eternas. Segurança pode ser determinística; personalidade precisa continuar revisável.
 
-High-risk actions such as security configuration changes or dangerous shell commands are never silently trusted and still require fresh approval. You can inspect or clear remembered permissions with `shadow-permissions list` and `shadow-permissions reset`.
+O prompt-base está em [`prompts/shadow.md`](prompts/shadow.md). Ele é deliberadamente simples: identidade e princípios ficam estáveis; modelo, ferramentas e contexto podem evoluir ao redor.
 
-Do not put API keys, credentials or personal memory in this repository.
+## Por que continuar isso?
 
-## Status
+Se amanhã você trocar Gemini por Claude, OpenAI por um modelo local, **por que deveria perder a relação construída com seu agente?** Se a memória é sua, por que ela deveria ficar presa a um fornecedor? E se o computador pudesse ter uma presença inteligente que você realmente consegue inspecionar, modificar e levar com você?
 
-Early prototype. Direct OpenAI and Google Gemini transports are wired to the Desktop Commander bridge and the existing voice loop. Anthropic provider support and packaging are next.
+Essas perguntas ainda não têm uma resposta definitiva. Esse é o espaço do projeto.
 
-## License
+Se alguma delas te incomodou o suficiente para imaginar uma solução melhor, abra uma issue. Se você consegue reduzir 300 ms da conversa, tornar uma permissão mais segura, melhorar memória, visão, voz ou portar Shadow para outro sistema, faça um fork e teste a ideia. **O projeto cresce por experimentos pequenos que funcionam.**
 
-MIT. See [LICENSE](LICENSE).
+## Princípios
+
+Privacidade local primeiro. Consentimento antes de impacto. Identidade independente do provider. Nada de fingir consciência. Nada de afirmar que uma ação aconteceu sem executá-la. Código pequeno antes de arquitetura ornamental.
+
+MIT License — use, modifique, critique e construa em cima.

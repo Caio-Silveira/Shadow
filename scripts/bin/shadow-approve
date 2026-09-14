@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+TITLE="${1:-Ação sensível}"
+MESSAGE="${2:-Shadow precisa da sua permissão para continuar.}"
+DETAILS="${3:-}"
+text="<b>${TITLE}</b>\n\n${MESSAGE}"
+if [[ -n "$DETAILS" ]]; then text+="\n\n<small>${DETAILS}</small>"; fi
+if "$HOME/.local/bin/gui-run" zenity --question \
+  --title="Shadow • Permissão" \
+  --text="$text" \
+  --ok-label="Permitir" \
+  --cancel-label="Negar" \
+  --width=460 \
+  --timeout=120; then
+  echo ALLOWED
+  exit 0
+else
+  rc=$?
+  echo DENIED
+  exit "$rc"
+fi

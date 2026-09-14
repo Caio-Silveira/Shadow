@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+BASE="$HOME/.local/share/shadow/voice/stt"
+CFG="$HOME/.local/share/shadow/config/audio.json"
+GUI="$HOME/.local/bin/gui-run"
+TMP="/dev/shm/shadow-audio-$(id -u)"
+CLI="$BASE/vendor/whisper.cpp/build/bin/whisper-cli"
+MODEL="$BASE/vendor/whisper.cpp/models/ggml-small.bin"
+VAD="$BASE/models/ggml-silero-v6.2.0.bin"
+mkdir -p "$TMP"; chmod 700 "$TMP"
+json_get(){ python3 - "$CFG" "$1" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1]))
+for p in sys.argv[2].split('.'): x=x[p]
+print(x)
+PY
+}
+def_source(){
+  "$GUI" wpctl inspect @DEFAULT_AUDIO_SOURCE@ | sed -n '1s/^id \([0-9][0-9]*\).*/\1/p'
+}
+record(){
+  local sec="${1:-6}" out="$TMP/current.wav" target rc
+  target="$(def_source)"; [[ -n "$target" ]] || { echo 'no default audio source' >&2; return 1; }
+  rm -f "$out"
+  set +e
+  timeout "$sec" "$GUI" pw-record --target="$target" --rate=16000 --channels=1 --format=s16 "$out" >"$TMP/record.out" 2>"$TMP/record.err"
+  rc=$?
+  set -e
+  [[ $rc -eq 0 || $rc -eq 124 ]] || { cat "$TMP/record.err" >&2; return $rc; }
+  chmod 600 "$out"; printf '%s\n' "$out"
+}
+transcribe(){
+  local f="${1:?audio file required}" lang threads prompt
+  lang="$(json_get stt.language)"; threads="$(json_get stt.threads)"; prompt="$(json_get stt.prompt)"
+  "$CLI" -m "$MODEL" -f "$f" -l "$lang" -t "$threads" --prompt "$prompt" \
+    --vad -vm "$VAD" -vt 0.5 -vsd 350 -vspd 180 \
+    -np -nt 2>"$TMP/whisper.err" | sed -e 's/^[[:space:]]*//' -e '/^$/d'
+}
+listen(){
+  local sec="${1:-12}" f
+  f="$("$HOME/.local/bin/shadow-capture" "$sec")" || return 0
+  transcribe "$f"
+}
+status(){
+  echo "input: $(json_get input.engine) source=$(json_get input.source) node=$(def_source)"
+  echo "stt: whisper.cpp model=$(json_get stt.model) language=$(json_get stt.language)"
+  echo "vad: $(json_get stt.vad)"
+  [[ -x "$CLI" ]] && echo "binary: ok" || echo "binary: missing"
+  [[ -s "$MODEL" ]] && echo "model: ok" || echo "model: missing"
+  [[ -s "$VAD" ]] && echo "vad-model: ok" || echo "vad-model: missing"
+}
+case "${1:-status}" in
+  status) status ;;
+  record) shift; record "${1:-6}" ;;
+  transcribe) shift; transcribe "${1:?audio file required}" ;;
+  listen) shift; listen "${1:-8}" ;;
+  clean) rm -rf "$TMP" ;;
+  *) echo 'usage: shadow-hear {status|record [seconds]|transcribe file|listen [seconds]|clean}' >&2; exit 2 ;;
+esac

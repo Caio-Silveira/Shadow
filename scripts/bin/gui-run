@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -e
+uid="$(id -u)"
+runtime="/run/user/$uid"
+# Prefer the environment of the active GNOME Shell so this survives display/auth changes.
+gnome_pid="$(pgrep -u "$uid" -x gnome-shell | head -n1 || true)"
+if [ -n "$gnome_pid" ] && [ -r "/proc/$gnome_pid/environ" ]; then
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      DISPLAY=*|XAUTHORITY=*|XDG_RUNTIME_DIR=*|DBUS_SESSION_BUS_ADDRESS=*|XDG_SESSION_TYPE=*|XDG_CURRENT_DESKTOP=*|DESKTOP_SESSION=*) export "$entry" ;;
+    esac
+  done < "/proc/$gnome_pid/environ"
+fi
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$runtime}"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$runtime/bus}"
+if [ -z "${DISPLAY:-}" ] && [ -S /tmp/.X11-unix/X0 ]; then export DISPLAY=:0; fi
+if [ -z "${XAUTHORITY:-}" ] && [ -r "$runtime/gdm/Xauthority" ]; then export XAUTHORITY="$runtime/gdm/Xauthority"; fi
+if [ "$#" -eq 0 ]; then
+  printf 'DISPLAY=%s\nXAUTHORITY=%s\nXDG_RUNTIME_DIR=%s\nDBUS_SESSION_BUS_ADDRESS=%s\n' "${DISPLAY:-}" "${XAUTHORITY:-}" "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS"
+  exit 0
+fi
+exec "$@"

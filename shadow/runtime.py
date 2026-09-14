@@ -2,6 +2,8 @@ import argparse, json, os, subprocess, sys
 from .mcp_dc import DesktopCommanderMCP
 from .openai_provider import OpenAIProvider
 from .google_provider import GoogleProvider
+from .anthropic_provider import AnthropicProvider
+from .compatible_provider import CompatibleResponsesProvider
 from .permissions import approve_calls
 
 ROOT = os.path.expanduser(os.getenv("SHADOW_HOME", "~/.local/share/shadow"))
@@ -26,10 +28,13 @@ def remember_turn(user, shadow):
     with open(HISTORY,"w",encoding="utf-8") as f: json.dump(data,f,ensure_ascii=False)
     os.chmod(HISTORY,0o600)
 
+ACTIVE_TOOLS={"read_file","read_multiple_files","write_file","create_directory","list_directory","move_file","start_search","get_more_search_results","stop_search","get_file_info","edit_block","start_process","read_process_output","interact_with_process","list_sessions","list_processes","kill_process"}
+
 def mcp_tools(tools):
     out=[]
     for t in tools:
-        out.append({"name":t["name"],"description":t.get("description","")[:2000],"parameters":t.get("inputSchema") or {"type":"object","properties":{}}})
+        if t["name"] not in ACTIVE_TOOLS: continue
+        out.append({"name":t["name"],"description":t.get("description","")[:600],"parameters":t.get("inputSchema") or {"type":"object","properties":{}}})
     return out
 
 def openai_tools(tools):
@@ -61,6 +66,12 @@ def google_calls(resp):
             fc=p.get("functionCall")
             if fc: calls.append(fc)
     return calls
+
+def anthropic_text(resp):
+    return "\n".join(x.get("text","") for x in resp.get("content",[]) if x.get("type")=="text").strip()
+
+def anthropic_calls(resp):
+    return [x for x in resp.get("content",[]) if x.get("type")=="tool_use"]
 
 def provider_name():
     return os.getenv("SHADOW_PROVIDER", "openai").strip().lower()
@@ -111,8 +122,23 @@ def run_turn(text):
                     except Exception: response={"result":raw}
                     outputs.append({"name":name,"response":response})
                 resp=provider.continue_with_tool_outputs(resp,outputs,tools)
-        elif provider_id == "openai":
-            tools=openai_tools(raw_tools); provider=OpenAIProvider(); resp=provider.create(instructions=instructions,text=text,tools=tools)
+        elif provider_id == "anthropic":
+            tools=mcp_tools(raw_tools); provider=AnthropicProvider(); resp=provider.create(instructions=instructions,text=text,tools=tools)
+            loops=0
+            while True:
+                calls=anthropic_calls(resp)
+                if not calls:
+                    answer=anthropic_text(resp); remember_turn(text,answer); return answer,resp
+                parsed=[(c["name"],c.get("input") or {}) for c in calls]
+                approved=approve_calls(parsed); outputs=[]
+                for call in calls:
+                    loops += 1
+                    if loops > 24: raise RuntimeError("tool loop limit reached")
+                    result={"denied":True,"reason":"User approval required and was not granted."} if not approved else dc.call_tool(call["name"],call.get("input") or {})
+                    outputs.append({"id":call["id"],"content":json.dumps(result,ensure_ascii=False)[:int(os.getenv("SHADOW_TOOL_OUTPUT_CHARS","24000"))]})
+                resp=provider.continue_with_tool_outputs(resp,outputs,tools)
+        elif provider_id in {"openai","deepseek","lmstudio"}:
+            tools=openai_tools(raw_tools); provider=OpenAIProvider() if provider_id=="openai" else CompatibleResponsesProvider(provider_id); resp=provider.create(instructions=instructions,text=text,tools=tools)
             loops=0
             while True:
                 calls=openai_calls(resp)
@@ -131,7 +157,7 @@ def run_turn(text):
                     result={"denied":True,"reason":"User approval required and was not granted."} if not approved else dc.call_tool(call["name"],args)
                     limit=int(os.getenv("SHADOW_TOOL_OUTPUT_CHARS","24000"))
                     outputs.append({"type":"function_call_output","call_id":call["call_id"],"output":json.dumps(result,ensure_ascii=False)[:limit]})
-                resp=provider.continue_with_tool_outputs(resp["id"],outputs,tools)
+                resp=provider.continue_with_tool_outputs(resp["id"],outputs,tools) if provider_id=="openai" else provider.continue_with_tool_outputs(resp,outputs,tools)
         else:
             raise RuntimeError(f"Unsupported SHADOW_PROVIDER: {provider_id}")
     finally: dc.close()
