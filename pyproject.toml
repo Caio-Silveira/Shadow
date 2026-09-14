@@ -12,6 +12,7 @@ authors = [{name = "Caio Silveira"}]
 
 [project.scripts]
 shadow-api = "shadow.runtime:main"
+shadow-permissions = "shadow.permissions:main"
 
 [tool.setuptools]
 packages = ["shadow"]

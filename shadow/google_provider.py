@@ -4,7 +4,7 @@ BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 class GoogleProvider:
     def __init__(self, model=None):
-        self.model = model or os.getenv("SHADOW_GOOGLE_MODEL") or os.getenv("SHADOW_MODEL") or "gemini-2.5-flash"
+        self.model = model or os.getenv("SHADOW_GOOGLE_MODEL") or os.getenv("SHADOW_MODEL") or "gemini-3.6-flash"
         self.key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         if not self.key:
             raise RuntimeError("GEMINI_API_KEY (or GOOGLE_API_KEY) is not set")
@@ -20,13 +20,31 @@ class GoogleProvider:
             raise RuntimeError(f"Google Gemini HTTP {e.code}: {body}")
 
     @staticmethod
+    def _clean_schema(value):
+        if isinstance(value, dict):
+            out={}
+            for k,v in value.items():
+                if k in {"$schema","additionalProperties","const","$id","title","default","examples"}:
+                    continue
+                if k in {"anyOf","oneOf"}:
+                    choices=[GoogleProvider._clean_schema(x) for x in v if isinstance(x,dict)]
+                    nonnull=[x for x in choices if x.get("type") != "null"]
+                    if nonnull: return nonnull[0]
+                    continue
+                out[k]=GoogleProvider._clean_schema(v)
+            return out
+        if isinstance(value, list):
+            return [GoogleProvider._clean_schema(x) for x in value]
+        return value
+
+    @staticmethod
     def _tools(tools):
         decl=[]
         for t in tools:
             decl.append({
                 "name": t["name"],
                 "description": t.get("description", "")[:2000],
-                "parameters": t.get("parameters") or {"type":"object","properties":{}},
+                "parameters": GoogleProvider._clean_schema(t.get("parameters") or {"type":"object","properties":{}}),
             })
         return [{"functionDeclarations": decl}] if decl else []
 

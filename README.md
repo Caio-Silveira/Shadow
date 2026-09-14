@@ -1,5 +1,7 @@
 # Shadow
 
+<p align="center"><img src="assets/shadow-face.svg" alt="Shadow face" width="180"></p>
+
 Shadow is an experiment in making an AI assistant feel less like a website you visit and more like a persistent presence on your own computer.
 
 The model is still remote. The desktop stays local. Shadow sits between them: it carries an identity, memory, context and permission model, then gives the model a controlled way to work with the machine through Desktop Commander.
@@ -37,11 +39,11 @@ python3 -m venv .venv
 pip install -e .
 export SHADOW_PROVIDER=google
 export GEMINI_API_KEY="your-key"
-export SHADOW_GOOGLE_MODEL="gemini-2.5-flash"
+export SHADOW_GOOGLE_MODEL="gemini-3.6-flash"
 shadow-api "What is running on my machine right now?"
 ```
 
-Choose the provider with `SHADOW_PROVIDER=google` or `SHADOW_PROVIDER=openai`. Google defaults to `gemini-2.5-flash`; OpenAI defaults to `gpt-5.6-luna`. Provider-specific model variables are shown in `.env.example`.
+Choose the provider with `SHADOW_PROVIDER=google` or `SHADOW_PROVIDER=openai`. Google defaults to `gemini-3.6-flash`; OpenAI defaults to `gpt-5.6-luna`. Provider-specific model variables are shown in `.env.example`.
 
 The local Desktop Commander paths can be overridden with `SHADOW_NODE` and `SHADOW_DC_SERVER`. See `.env.example`.
 
@@ -51,7 +53,9 @@ Because most turns do not need it. Shadow should ask for the smallest useful pie
 
 ## Safety
 
-Desktop access is powerful. Shadow is designed around explicit permission boundaries: ordinary low-risk reads can be automatic; destructive, privileged, security-sensitive, financial or external communication actions should require user approval.
+Desktop access is powerful. Shadow is designed around explicit permission boundaries. Low-risk reads are automatic. For write/execute/process capabilities, Shadow batches the requested actions into one approval dialog and remembers approved capability scopes locally, so the same class of safe action does not keep asking on every turn.
+
+High-risk actions such as security configuration changes or dangerous shell commands are never silently trusted and still require fresh approval. You can inspect or clear remembered permissions with `shadow-permissions list` and `shadow-permissions reset`.
 
 Do not put API keys, credentials or personal memory in this repository.
 

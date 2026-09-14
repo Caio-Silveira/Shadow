@@ -1,7 +1,8 @@
-import argparse, json, os, sys, subprocess
+import argparse, json, os, sys
 from .mcp_dc import DesktopCommanderMCP
 from .openai_provider import OpenAIProvider
 from .google_provider import GoogleProvider
+from .permissions import approve_calls
 
 ROOT = os.path.expanduser(os.getenv("SHADOW_HOME", "~/.local/share/shadow"))
 
@@ -46,16 +47,6 @@ def google_calls(resp):
             if fc: calls.append(fc)
     return calls
 
-SAFE_TOOLS = {"get_config","read_file","read_multiple_files","list_directory","start_search","get_more_search_results","stop_search","read_process_output"}
-
-def approve_tool(name, args):
-    if name in SAFE_TOOLS: return True
-    helper=os.path.expanduser("~/.local/bin/shadow-approve")
-    if not os.path.exists(helper): return False
-    detail=json.dumps(args, ensure_ascii=False)[:1200]
-    r=subprocess.run([helper, f"Desktop action: {name}", "Shadow wants to use a desktop tool that can change or execute something.", detail], stdout=subprocess.DEVNULL)
-    return r.returncode == 0
-
 def provider_name():
     return os.getenv("SHADOW_PROVIDER", "openai").strip().lower()
 
@@ -73,12 +64,14 @@ def run_turn(text):
             while True:
                 calls=google_calls(resp)
                 if not calls: return extract_google_text(resp), resp
+                pairs=[(call["name"], call.get("args") or {}) for call in calls]
+                approved=approve_calls(pairs)
                 outputs=[]
                 for call in calls:
                     loops += 1
                     if loops > 24: raise RuntimeError("tool loop limit reached")
                     name=call["name"]; args=call.get("args") or {}
-                    result={"denied":True,"reason":"User approval required and was not granted."} if not approve_tool(name,args) else dc.call_tool(name,args)
+                    result={"denied":True,"reason":"User approval required and was not granted."} if not approved else dc.call_tool(name,args)
                     limit=int(os.getenv("SHADOW_TOOL_OUTPUT_CHARS","24000"))
                     raw=json.dumps(result,ensure_ascii=False)[:limit]
                     try: response=json.loads(raw)
@@ -91,13 +84,17 @@ def run_turn(text):
             while True:
                 calls=openai_calls(resp)
                 if not calls: return extract_openai_text(resp), resp
-                outputs=[]
+                parsed=[]
                 for call in calls:
-                    loops += 1
-                    if loops > 24: raise RuntimeError("tool loop limit reached")
                     try: args=json.loads(call.get("arguments") or "{}")
                     except Exception: args={}
-                    result={"denied":True,"reason":"User approval required and was not granted."} if not approve_tool(call["name"],args) else dc.call_tool(call["name"],args)
+                    parsed.append((call,args))
+                approved=approve_calls([(call["name"],args) for call,args in parsed])
+                outputs=[]
+                for call,args in parsed:
+                    loops += 1
+                    if loops > 24: raise RuntimeError("tool loop limit reached")
+                    result={"denied":True,"reason":"User approval required and was not granted."} if not approved else dc.call_tool(call["name"],args)
                     limit=int(os.getenv("SHADOW_TOOL_OUTPUT_CHARS","24000"))
                     outputs.append({"type":"function_call_output","call_id":call["call_id"],"output":json.dumps(result,ensure_ascii=False)[:limit]})
                 resp=provider.continue_with_tool_outputs(resp["id"],outputs,tools)
