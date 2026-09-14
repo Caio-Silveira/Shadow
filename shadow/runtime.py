@@ -30,15 +30,29 @@ def remember_turn(user, shadow):
 
 ACTIVE_TOOLS={"read_file","read_multiple_files","write_file","create_directory","list_directory","move_file","start_search","get_more_search_results","stop_search","get_file_info","edit_block","start_process","read_process_output","interact_with_process","list_sessions","list_processes","kill_process"}
 
-def mcp_tools(tools):
+def relevant_tool_names(text):
+    t=text.lower()
+    desktop_cues=("abre ","abrir ","fecha ","fechar ","calculadora","spotify","discord","browser","navegador","janela","window","tela","aplicativo","app ","toque ","tocar ","música","musica","pause","play","volume")
+    file_cues=("arquivo","pasta","diretório","diretorio","file ","folder","salva","salvar","escreva","editar","edite","leia","ler ")
+    search_cues=("procure","buscar","busque","pesquise","encontre","find ","search ")
+    process_cues=("processo","terminal","comando","execute","rodar","roda ","process ")
+    names=set()
+    if any(x in t for x in desktop_cues): names.update({"start_process","read_process_output","list_processes"})
+    if any(x in t for x in file_cues): names.update({"read_file","read_multiple_files","write_file","create_directory","list_directory","move_file","get_file_info","edit_block"})
+    if any(x in t for x in search_cues): names.update({"start_search","get_more_search_results","stop_search"})
+    if any(x in t for x in process_cues): names.update({"start_process","read_process_output","interact_with_process","list_sessions","list_processes","kill_process"})
+    return names
+
+def mcp_tools(tools, text=""):
+    wanted=relevant_tool_names(text)
     out=[]
     for t in tools:
-        if t["name"] not in ACTIVE_TOOLS: continue
-        out.append({"name":t["name"],"description":t.get("description","")[:600],"parameters":t.get("inputSchema") or {"type":"object","properties":{}}})
+        if t["name"] not in ACTIVE_TOOLS or t["name"] not in wanted: continue
+        out.append({"name":t["name"],"description":t.get("description","")[:220],"parameters":t.get("inputSchema") or {"type":"object","properties":{}}})
     return out
 
-def openai_tools(tools):
-    return [{"type":"function", **t} for t in mcp_tools(tools)]
+def openai_tools(tools, text=""):
+    return [{"type":"function", **t} for t in mcp_tools(tools, text)]
 
 def extract_openai_text(resp):
     if resp.get("output_text"): return resp["output_text"]
@@ -91,7 +105,29 @@ def capture_screen():
     except Exception:
         return None
 
+def direct_safe_desktop_action(text):
+    t=text.lower()
+    gui=os.path.expanduser("~/.local/bin/gui-run")
+    if not os.path.exists(gui): return None
+    wants_open=any(x in t for x in ("abre", "abrir", "abra", "inicia", "iniciar"))
+    if wants_open and "calculadora" in t:
+        subprocess.Popen([gui,"gnome-calculator"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            for _ in range(12):
+                r=subprocess.run([gui,"wmctrl","-lx"],capture_output=True,text=True,timeout=2)
+                if "gnome-calculator" in r.stdout.lower():
+                    return "Pronto, abri a calculadora."
+                import time; time.sleep(0.15)
+        except Exception:
+            pass
+        return "Tentei abrir a calculadora, mas não consegui confirmar a janela."
+    return None
+
 def run_turn(text):
+    direct=direct_safe_desktop_action(text)
+    if direct is not None:
+        remember_turn(text,direct)
+        return direct, {"direct_action": True}
     provider_id=provider_name()
     image_path=capture_screen() if (provider_id == "google" and wants_screen(text)) else None
     dc=DesktopCommanderMCP().start()
@@ -100,9 +136,9 @@ def run_turn(text):
         identity=read_text(os.path.join(ROOT,"prompts","shadow.md"), "You are Shadow, a desktop companion.")
         observer=read_text(os.path.join(ROOT,"prompts","observer.md"), "")
         history=recent_history()
-        instructions=(identity+"\n\nConversation style: This is a live spoken conversation. Answer naturally, directly and usually briefly. Avoid markdown formatting in ordinary speech. Do not restate the user request.\n\nRecent conversation (context only):\n"+history+"\n\nInternal critical review:\n"+observer+"\n\nUse Desktop Commander tools whenever the user asks you to act on the computer. You can use start_process with installed desktop utilities. Desktop Commander itself runs headless, BUT ~/.local/bin/gui-run bridges commands into the user active X11 desktop (DISPLAY=:0); therefore GUI control IS available. Always use absolute /home/silverdev/.local/bin/gui-run (not a bare gui-run) for wmctrl, xdotool, playerctl, gdbus and GUI application launches. Do not claim you lack GUI control merely because there is no dedicated app API. For GUI tasks, inspect visible windows with wmctrl, focus the target window, then use keyboard/mouse automation when appropriate and verify the result when practical. For media players prefer playerctl. If the user asks to calculate something specifically in the Calculator app, actually interact with that app instead of merely computing the answer yourself. IMPORTANT: when you claim an external action is done, it must have been performed by a tool in this turn. Never say an app was opened, a song was started, a window was changed, or a GUI action completed unless you actually executed and, when practical, verified it. For X11 GUI actions through start_process, prefix commands with /home/silverdev/.local/bin/gui-run so DISPLAY/XAUTHORITY are correct. Do not infer GUI is unavailable from Desktop Commander own headless environment; test via /home/silverdev/.local/bin/gui-run wmctrl -l first. Example: ~/.local/bin/gui-run wmctrl -l; ~/.local/bin/gui-run wmctrl -a Calculator; ~/.local/bin/gui-run xdotool key 2 plus 2 Return. Spotify is controllable with ~/.local/bin/gui-run playerctl --player=spotify play-pause/next/previous and its window can be focused with wmctrl; do not claim a dedicated API is required for ordinary playback controls. Prefer targeted reads/actions. Never expose secrets. Ask for approval before destructive or high-impact actions.")
+        instructions=(identity+"\n\nConversation style: This is a live spoken conversation. Answer naturally, directly and usually briefly. Respond in Brazilian Portuguese unless the user clearly switches language. Avoid markdown formatting in ordinary speech. Do not restate the user request.\n\nRecent conversation (context only):\n"+history+"\n\nInternal critical review:\n"+observer+"\n\nUse Desktop Commander tools whenever the user asks you to act on the computer. You can use start_process with installed desktop utilities. Desktop Commander itself runs headless, BUT ~/.local/bin/gui-run bridges commands into the user active X11 desktop (DISPLAY=:0); therefore GUI control IS available. Always use absolute /home/silverdev/.local/bin/gui-run (not a bare gui-run) for wmctrl, xdotool, playerctl, gdbus and GUI application launches. Do not claim you lack GUI control merely because there is no dedicated app API. For GUI tasks, inspect visible windows with wmctrl, focus the target window, then use keyboard/mouse automation when appropriate and verify the result when practical. For media players prefer playerctl. If the user asks to calculate something specifically in the Calculator app, actually interact with that app instead of merely computing the answer yourself. IMPORTANT: when you claim an external action is done, it must have been performed by a tool in this turn. Never say an app was opened, a song was started, a window was changed, or a GUI action completed unless you actually executed and, when practical, verified it. For X11 GUI actions through start_process, prefix commands with /home/silverdev/.local/bin/gui-run so DISPLAY/XAUTHORITY are correct. Do not infer GUI is unavailable from Desktop Commander own headless environment; test via /home/silverdev/.local/bin/gui-run wmctrl -l first. Example: ~/.local/bin/gui-run wmctrl -l; ~/.local/bin/gui-run wmctrl -a Calculator; ~/.local/bin/gui-run xdotool key 2 plus 2 Return. Spotify is controllable with ~/.local/bin/gui-run playerctl --player=spotify play-pause/next/previous and its window can be focused with wmctrl; do not claim a dedicated API is required for ordinary playback controls. Prefer targeted reads/actions. Never expose secrets. Ask for approval before destructive or high-impact actions.")
         if provider_id == "google":
-            tools=mcp_tools(raw_tools); provider=GoogleProvider(); screen_instructions=instructions + ("\n\nA JPEG image is attached to this user turn. It is a fresh capture of the user current desktop screen. Analyze what is visibly present in that image and answer from it; do not claim you cannot see the screen." if image_path else ""); resp=provider.create(instructions=screen_instructions,text=text,tools=tools,image_path=image_path)
+            tools=mcp_tools(raw_tools,text); provider=GoogleProvider(); screen_instructions=instructions + ("\n\nA JPEG image is attached to this user turn. It is a fresh capture of the user current desktop screen. Analyze what is visibly present in that image and answer from it; do not claim you cannot see the screen." if image_path else ""); resp=provider.create(instructions=screen_instructions,text=text,tools=tools,image_path=image_path)
             loops=0
             while True:
                 calls=google_calls(resp)
@@ -123,7 +159,7 @@ def run_turn(text):
                     outputs.append({"name":name,"response":response})
                 resp=provider.continue_with_tool_outputs(resp,outputs,tools)
         elif provider_id == "anthropic":
-            tools=mcp_tools(raw_tools); provider=AnthropicProvider(); resp=provider.create(instructions=instructions,text=text,tools=tools)
+            tools=mcp_tools(raw_tools,text); provider=AnthropicProvider(); resp=provider.create(instructions=instructions,text=text,tools=tools)
             loops=0
             while True:
                 calls=anthropic_calls(resp)
@@ -138,7 +174,7 @@ def run_turn(text):
                     outputs.append({"id":call["id"],"content":json.dumps(result,ensure_ascii=False)[:int(os.getenv("SHADOW_TOOL_OUTPUT_CHARS","24000"))]})
                 resp=provider.continue_with_tool_outputs(resp,outputs,tools)
         elif provider_id in {"openai","deepseek","lmstudio"}:
-            tools=openai_tools(raw_tools); provider=OpenAIProvider() if provider_id=="openai" else CompatibleResponsesProvider(provider_id); resp=provider.create(instructions=instructions,text=text,tools=tools)
+            tools=openai_tools(raw_tools,text); provider=OpenAIProvider() if provider_id=="openai" else CompatibleResponsesProvider(provider_id); resp=provider.create(instructions=instructions,text=text,tools=tools)
             loops=0
             while True:
                 calls=openai_calls(resp)
