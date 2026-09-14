@@ -1,4 +1,4 @@
-import argparse, json, os, sys
+import argparse, json, os, sys, subprocess
 from .mcp_dc import DesktopCommanderMCP
 from .openai_provider import OpenAIProvider
 
@@ -27,6 +27,22 @@ def extract_text(resp):
 def function_calls(resp):
     return [x for x in resp.get("output",[]) if x.get("type")=="function_call"]
 
+SAFE_TOOLS = {
+    "get_config", "read_file", "read_multiple_files", "list_directory",
+    "start_search", "get_more_search_results", "stop_search",
+    "read_process_output"
+}
+
+def approve_tool(name, args):
+    if name in SAFE_TOOLS:
+        return True
+    helper=os.path.expanduser("~/.local/bin/shadow-approve")
+    if not os.path.exists(helper):
+        return False
+    detail=json.dumps(args, ensure_ascii=False)[:1200]
+    r=subprocess.run([helper, f"Desktop action: {name}", "Shadow wants to use a desktop tool that can change or execute something.", detail], stdout=subprocess.DEVNULL)
+    return r.returncode == 0
+
 def run_turn(text):
     dc=DesktopCommanderMCP().start()
     try:
@@ -45,8 +61,12 @@ def run_turn(text):
                 if loops > 24: raise RuntimeError("tool loop limit reached")
                 try: args=json.loads(call.get("arguments") or "{}")
                 except Exception: args={}
-                result=dc.call_tool(call["name"], args)
-                outputs.append({"type":"function_call_output","call_id":call["call_id"],"output":json.dumps(result,ensure_ascii=False)[:120000]})
+                if not approve_tool(call["name"], args):
+                    result={"denied": True, "reason": "User approval required and was not granted."}
+                else:
+                    result=dc.call_tool(call["name"], args)
+                limit=int(os.getenv("SHADOW_TOOL_OUTPUT_CHARS", "24000"))
+                outputs.append({"type":"function_call_output","call_id":call["call_id"],"output":json.dumps(result,ensure_ascii=False)[:limit]})
             resp=provider.continue_with_tool_outputs(resp["id"],outputs,tools)
     finally: dc.close()
 
