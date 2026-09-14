@@ -4,7 +4,7 @@ API = "https://api.openai.com/v1/responses"
 
 class OpenAIProvider:
     def __init__(self, model=None):
-        self.model = model or os.getenv("SHADOW_MODEL", "gpt-5.6-luna")
+        self.model = model or os.getenv("SHADOW_OPENAI_MODEL") or os.getenv("SHADOW_MODEL", "gpt-5.6-luna")
         self.key = os.getenv("OPENAI_API_KEY")
         if not self.key: raise RuntimeError("OPENAI_API_KEY is not set")
 

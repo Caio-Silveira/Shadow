@@ -15,7 +15,7 @@ voice -> whisper.cpp -> Shadow runtime -> provider API
                          response -> Kokoro -> speakers
 ```
 
-The provider layer is intentionally separate from the rest of the runtime. OpenAI is the first implementation; Anthropic support is planned on the same boundary.
+The provider layer is intentionally separate from the rest of the runtime. OpenAI and Google Gemini are supported today; Anthropic is planned on the same boundary.
 
 Desktop Commander is not used as the conversation transport. It is Shadow's desktop tool layer. The model asks for only the state it actually needs, which also helps keep API context and cost down.
 
@@ -27,7 +27,7 @@ The public repo deliberately does **not** contain personal memory, live prompts,
 
 ## Quick start
 
-You need Python 3.10+, Desktop Commander MCP and an OpenAI API key.
+You need Python 3.10+, Desktop Commander MCP and a provider API key. For development, Google Gemini is a convenient option because supported Gemini Developer API models have a free tier.
 
 ```bash
 git clone https://github.com/Caio-Silveira/Shadow.git
@@ -35,11 +35,13 @@ cd Shadow
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
-export OPENAI_API_KEY="your-key"
+export SHADOW_PROVIDER=google
+export GEMINI_API_KEY="your-key"
+export SHADOW_GOOGLE_MODEL="gemini-2.5-flash"
 shadow-api "What is running on my machine right now?"
 ```
 
-By default Shadow uses `gpt-5.6-luna`. Set `SHADOW_MODEL` to change it.
+Choose the provider with `SHADOW_PROVIDER=google` or `SHADOW_PROVIDER=openai`. Google defaults to `gemini-2.5-flash`; OpenAI defaults to `gpt-5.6-luna`. Provider-specific model variables are shown in `.env.example`.
 
 The local Desktop Commander paths can be overridden with `SHADOW_NODE` and `SHADOW_DC_SERVER`. See `.env.example`.
 
@@ -55,7 +57,7 @@ Do not put API keys, credentials or personal memory in this repository.
 
 ## Status
 
-Early prototype. The direct OpenAI transport and Desktop Commander bridge are being wired into the existing voice loop now. Anthropic provider support, packaging and a one-command installer are next.
+Early prototype. Direct OpenAI and Google Gemini transports are wired to the Desktop Commander bridge and the existing voice loop. Anthropic provider support and packaging are next.
 
 ## License
 
