@@ -1,4 +1,4 @@
-import json, os, urllib.request, urllib.error
+import base64, json, os, time, urllib.request, urllib.error
 
 BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -12,12 +12,16 @@ class GoogleProvider:
     def _post(self, payload):
         url = f"{BASE}/{self.model}:generateContent?key={self.key}"
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=180) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", "replace")
-            raise RuntimeError(f"Google Gemini HTTP {e.code}: {body}")
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=180) as r:
+                    return json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                body = e.read().decode("utf-8", "replace")
+                if e.code in (429, 503) and attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"Google Gemini HTTP {e.code}: {body}")
 
     @staticmethod
     def _clean_schema(value):
@@ -48,10 +52,15 @@ class GoogleProvider:
             })
         return [{"functionDeclarations": decl}] if decl else []
 
-    def create(self, *, instructions, text, tools):
+    def create(self, *, instructions, text, tools, image_path=None):
+        parts=[{"text":text}]
+        if image_path and os.path.isfile(image_path):
+            with open(image_path, "rb") as f:
+                encoded=base64.b64encode(f.read()).decode("ascii")
+            parts.append({"inlineData":{"mimeType":"image/jpeg","data":encoded}})
         payload={
             "systemInstruction": {"parts":[{"text":instructions}]},
-            "contents":[{"role":"user","parts":[{"text":text}]}],
+            "contents":[{"role":"user","parts":parts}],
             "tools": self._tools(tools),
         }
         resp=self._post(payload)

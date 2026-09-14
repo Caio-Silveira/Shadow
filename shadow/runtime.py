@@ -1,4 +1,4 @@
-import argparse, json, os, sys
+import argparse, json, os, subprocess, sys
 from .mcp_dc import DesktopCommanderMCP
 from .openai_provider import OpenAIProvider
 from .google_provider import GoogleProvider
@@ -50,8 +50,24 @@ def google_calls(resp):
 def provider_name():
     return os.getenv("SHADOW_PROVIDER", "openai").strip().lower()
 
+def wants_screen(text):
+    t=text.lower()
+    cues=("o que você está vendo", "o que voce esta vendo", "minha tela", "na tela", "olha a tela", "veja a tela", "vê na tela", "ver na tela", "screen")
+    return any(c in t for c in cues)
+
+def capture_screen():
+    helper=os.path.expanduser("~/.local/bin/dc-vision")
+    if not os.path.exists(helper): return None
+    try:
+        r=subprocess.run([helper,"frame"], capture_output=True, text=True, timeout=10, check=True)
+        path=r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+        return path if path and os.path.isfile(path) else None
+    except Exception:
+        return None
+
 def run_turn(text):
     provider_id=provider_name()
+    image_path=capture_screen() if (provider_id == "google" and wants_screen(text)) else None
     dc=DesktopCommanderMCP().start()
     try:
         raw_tools=dc.list_tools()
@@ -59,7 +75,7 @@ def run_turn(text):
         observer=read_text(os.path.join(ROOT,"prompts","observer.md"), "")
         instructions=(identity+"\n\nInternal critical review:\n"+observer+"\n\nUse Desktop Commander tools only when needed. Prefer targeted reads/actions. Never expose secrets. Ask for approval before destructive or high-impact actions.")
         if provider_id == "google":
-            tools=mcp_tools(raw_tools); provider=GoogleProvider(); resp=provider.create(instructions=instructions,text=text,tools=tools)
+            tools=mcp_tools(raw_tools); provider=GoogleProvider(); screen_instructions=instructions + ("\n\nA JPEG image is attached to this user turn. It is a fresh capture of the user current desktop screen. Analyze what is visibly present in that image and answer from it; do not claim you cannot see the screen." if image_path else ""); resp=provider.create(instructions=screen_instructions,text=text,tools=tools,image_path=image_path)
             loops=0
             while True:
                 calls=google_calls(resp)
