@@ -5,11 +5,26 @@ from .google_provider import GoogleProvider
 from .permissions import approve_calls
 
 ROOT = os.path.expanduser(os.getenv("SHADOW_HOME", "~/.local/share/shadow"))
+HISTORY = os.path.expanduser("~/.local/share/shadow/runtime/conversation.json")
 
 def read_text(path, fallback=""):
     try:
         with open(path, encoding="utf-8") as f: return f.read()
     except FileNotFoundError: return fallback
+
+def recent_history():
+    try:
+        data=json.load(open(HISTORY,encoding="utf-8"))[-4:]
+        return "\n".join(f"User: {x['user']}\nShadow: {x['shadow']}" for x in data)
+    except Exception: return ""
+
+def remember_turn(user, shadow):
+    os.makedirs(os.path.dirname(HISTORY),exist_ok=True)
+    try: data=json.load(open(HISTORY,encoding="utf-8"))
+    except Exception: data=[]
+    data=(data+[{"user":user,"shadow":shadow}])[-8:]
+    with open(HISTORY,"w",encoding="utf-8") as f: json.dump(data,f,ensure_ascii=False)
+    os.chmod(HISTORY,0o600)
 
 def mcp_tools(tools):
     out=[]
@@ -73,13 +88,15 @@ def run_turn(text):
         raw_tools=dc.list_tools()
         identity=read_text(os.path.join(ROOT,"prompts","shadow.md"), "You are Shadow, a desktop companion.")
         observer=read_text(os.path.join(ROOT,"prompts","observer.md"), "")
-        instructions=(identity+"\n\nInternal critical review:\n"+observer+"\n\nUse Desktop Commander tools only when needed. Prefer targeted reads/actions. Never expose secrets. Ask for approval before destructive or high-impact actions.")
+        history=recent_history()
+        instructions=(identity+"\n\nConversation style: This is a live spoken conversation. Answer naturally, directly and usually briefly. Avoid markdown formatting in ordinary speech. Do not restate the user request.\n\nRecent conversation (context only):\n"+history+"\n\nInternal critical review:\n"+observer+"\n\nUse Desktop Commander tools only when needed. Prefer targeted reads/actions. Never expose secrets. Ask for approval before destructive or high-impact actions.")
         if provider_id == "google":
             tools=mcp_tools(raw_tools); provider=GoogleProvider(); screen_instructions=instructions + ("\n\nA JPEG image is attached to this user turn. It is a fresh capture of the user current desktop screen. Analyze what is visibly present in that image and answer from it; do not claim you cannot see the screen." if image_path else ""); resp=provider.create(instructions=screen_instructions,text=text,tools=tools,image_path=image_path)
             loops=0
             while True:
                 calls=google_calls(resp)
-                if not calls: return extract_google_text(resp), resp
+                if not calls:
+                    answer=extract_google_text(resp); remember_turn(text,answer); return answer, resp
                 pairs=[(call["name"], call.get("args") or {}) for call in calls]
                 approved=approve_calls(pairs)
                 outputs=[]
@@ -99,7 +116,8 @@ def run_turn(text):
             loops=0
             while True:
                 calls=openai_calls(resp)
-                if not calls: return extract_openai_text(resp), resp
+                if not calls:
+                    answer=extract_openai_text(resp); remember_turn(text,answer); return answer, resp
                 parsed=[]
                 for call in calls:
                     try: args=json.loads(call.get("arguments") or "{}")
